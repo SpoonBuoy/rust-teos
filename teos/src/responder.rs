@@ -567,7 +567,7 @@ mod tests {
     use std::ops::Deref;
     use std::sync::{Arc, Mutex};
 
-    use crate::dbm::{Error as DBError, DBM};
+    use crate::dbm::DBM;
     use crate::gatekeeper::UserInfo;
     use crate::rpc_errors;
     use crate::test_utils::{
@@ -575,6 +575,7 @@ mod tests {
         get_random_tracker, get_random_tx, get_random_user_id, store_appointment_and_fks_to_db,
         Blockchain, MockedServerQuery, DURATION, EXPIRY_DELTA, SLOTS, START_HEIGHT,
     };
+    use teos_common::dbm::Error as DBError;
 
     impl PartialEq for Responder {
         fn eq(&self, other: &Self) -> bool {
