@@ -640,16 +640,7 @@ impl DBM{
 async fn main() -> Result<()>{
     let con1 = AnyConnection::connect("postgres://postgres:arsalan@localhost/postgres").await?;
     let con2 = AnyConnection::connect("sqlite::memory:").await?;
-    //let mut a = DBM::<PgConnection>::new(con1, 1).unwrap();
     let mut a    = DBM::new(con1, 1).await?;
-    //let p =  a.store_data("INSERT INTO temp (user_id, available_slots, subscription_expiry) VALUES (153000, 988, 21031)".into()).await?;
-    // let p = a.store_user(1290, "Arsalan".into()).await;
-    // let pp = a.load_all_users().await;
-    // let mut h:HashSet<Vec<i32>> = HashSet::new();
-    // h.insert(vec![1530, 153000]);
-    // a.batch_remove_users(&h).await;
-    // println!("Inserted {:?}", p);
-    // println!("Not Terminated");
     let p = a.load_tower_key().await;
   Ok(())
 }
