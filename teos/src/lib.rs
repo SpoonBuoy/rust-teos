@@ -12,6 +12,7 @@ pub mod chain_monitor;
 pub mod cli_config;
 pub mod config;
 pub mod dbm;
+pub mod dbm1;
 #[doc(hidden)]
 mod errors;
 mod extended_appointment;

@@ -3,7 +3,7 @@ name = "teos"
 version = "0.0.1"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
-edition = "2021"
+edition = "2018"
 default-run="teosd"
 
 [[bin]]
@@ -13,10 +13,6 @@ path = "src/cli.rs"
 [[bin]]
 name = "teosd"
 path = "src/main.rs"
-
-[[bin]]
-name = "dbm"
-path = "src/dbm1.rs"
 
 [dependencies]
 # General

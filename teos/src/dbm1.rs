@@ -5,6 +5,7 @@ use sqlx::AnyConnection;
 use sqlx::Connection;
 use sqlx::Executor;
 use std::str::FromStr;
+use std::iter::FromIterator;
 use sqlx::Transaction;
 use sqlx::any::AnyArguments;
 use sqlx::any::AnyQueryResult;
@@ -24,7 +25,7 @@ use bitcoin::secp256k1::SecretKey;
 use bitcoin::BlockHash;
 use serde::Serialize;
 
-use teos_common::appointment::{compute_appointment_slots, Appointment, Locator};
+use teos_common::appointment::{Appointment, Locator};
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 //use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
@@ -580,7 +581,7 @@ impl DBM{
        match row{
             Ok(row) => {
                 let raw_hash: Vec<u8> = row.get(0).unwrap();
-                Ok(BlockHash::from_slice(&raw_hash).unwrap())
+                Some(BlockHash::from_slice(&raw_hash).unwrap())
             }
             Err(_) => {
                 None
