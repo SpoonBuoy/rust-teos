@@ -3,7 +3,7 @@ name = "teos"
 version = "0.0.1"
 authors = ["Sergi Delgado Segura <sergi.delgado.s@gmail.com>"]
 license = "MIT"
-edition = "2018"
+edition = "2021"
 default-run="teosd"
 
 [[bin]]
@@ -13,6 +13,10 @@ path = "src/cli.rs"
 [[bin]]
 name = "teosd"
 path = "src/main.rs"
+
+[[bin]]
+name = "dbm"
+path = "src/dbm1.rs"
 
 [dependencies]
 # General
@@ -30,13 +34,24 @@ tonic = "0.6"
 tokio = { version = "1.5", features = [ "rt-multi-thread" ] }
 triggered = "0.1.2"
 warp = "0.3.2"
+torut = "0.2.1"
+
+#dbm1 
+anyhow = "1.0"
+async-std = { version = "1", features = [ "attributes" ] }
+futures = "0.3"
+paw = "1.0"
+sqlx = { version = "0.5", features = [ "runtime-async-std-native-tls"  , "postgres", "sqlite", "any" ] }
+dotenv = "0.15.0"
+async-trait = "0.1.41"
+mockall = "0.11"
 
 # Bitcoin and Lightning
 bitcoin = { version = "0.27", features = [ "base64" ] }
 bitcoincore-rpc = "0.14.0"
-lightning = "0.0.104"
-lightning-net-tokio = "0.0.104"
-lightning-block-sync = { version = "0.0.104", features = [ "rpc-client" ] }
+lightning = "0.0.105"
+lightning-net-tokio = "0.0.105"
+lightning-block-sync = { version = "0.0.105", features = [ "rpc-client" ] }
 
 # Local
 teos-common = { path = "../teos-common" }
