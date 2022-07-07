@@ -13,6 +13,7 @@ pub mod dbm;
 pub mod errors;
 pub mod receipts;
 pub mod ser;
+pub mod dbm1;
 
 use std::fmt;
 use std::{convert::TryFrom, str::FromStr};

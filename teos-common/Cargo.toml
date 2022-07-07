@@ -23,5 +23,15 @@ chacha20poly1305 = "0.8.0"
 bitcoin = "0.27"
 lightning = "0.0.105"
 
+#dbm1 
+anyhow = "1.0"
+async-std = { version = "1", features = [ "attributes" ] }
+futures = "0.3"
+paw = "1.0"
+sqlx = { version = "0.5", features = [ "runtime-async-std-native-tls"  , "postgres", "sqlite", "any" ] }
+dotenv = "0.15.0"
+async-trait = "0.1.41"
+mockall = "0.11"
+
 [build-dependencies]
 tonic-build = "0.6"

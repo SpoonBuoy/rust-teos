@@ -1,16 +1,9 @@
 use async_trait::async_trait;
-use sqlx::Error;
 use anyhow::*;
-use sqlx::AnyConnection;
-use sqlx::Connection;
-use sqlx::Executor;
 use std::str::FromStr;
 use std::iter::FromIterator;
-use sqlx::Transaction;
-use sqlx::any::AnyArguments;
-use sqlx::any::AnyQueryResult;
-use sqlx::any::AnyRow;
-use sqlx::error;
+use sqlx::{AnyConnection, Connection, Executor, error, Transaction,Error};
+use sqlx::any::{AnyArguments, AnyQueryResult, AnyRow};
 use sqlx::query::Query;
 use std::result::Result::Ok;
 use std::collections::{HashMap, HashSet};
@@ -27,39 +20,51 @@ use serde::Serialize;
 
 use teos_common::appointment::{Appointment, Locator};
 use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
-//use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
-
+use teos_common::dbm1::{DatabaseConnection, DatabaseManager};
 use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
 use crate::responder::{ConfirmationStatus, TransactionTracker};
-#[derive(Debug)]
-pub enum Errorr {
-    AlreadyExists,
-    MissingForeignKey,
-    MissingField,
-    NotFound,
-}
-const TABLES: [&str; 1] = [
-    "CREATE TABLE IF NOT EXISTS temp (
+
+
+const TABLES: [&str; 5] = [
+    "CREATE TABLE IF NOT EXISTS users (
     user_id INT PRIMARY KEY,
     available_slots INT NOT NULL,
     subscription_expiry INT NOT NULL
-)"];
+)",
+    "CREATE TABLE IF NOT EXISTS appointments (
+    UUID INT PRIMARY KEY,
+    locator INT NOT NULL,
+    encrypted_blob BLOB NOT NULL,
+    to_self_delay INT NOT NULL,
+    user_signature BLOB NOT NULL,
+    start_block INT NOT NULL,
+    user_id INT NOT NULL,
+    FOREIGN KEY(user_id)
+        REFERENCES users(user_id)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS trackers (
+    UUID INT PRIMARY KEY,
+    dispute_tx BLOB NOT NULL,
+    penalty_tx BLOB NOT NULL,
+    height INT NOT NULL,
+    confirmed BOOL NOT NULL,
+    FOREIGN KEY(UUID)
+        REFERENCES appointments(UUID)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS last_known_block (
+    id INT PRIMARY KEY,
+    block_hash INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key INT NOT NULL
+)",
+];
 //Traits
-pub trait DatabaseConnection{
-    fn get_connection(&self) -> &AnyConnection;
-
-    fn get_mut_connection(&mut self) -> &mut AnyConnection;
-}
-#[async_trait]
-pub trait DatabaseManager: Sized {
-    async fn create_tables(&mut self, tables: Vec<&str>) -> Result<()>;
-    async fn store_data(&mut self, query: &str) -> Result<(), Error>;
-    async fn remove_data(&mut self, query: &str) -> Result<(), Error>;
-    async fn update_data(&mut self, query: &str) -> Result<(), Error>;
- }
-//Traits end
 
 #[derive(Debug)]
 pub struct DBM{
@@ -78,54 +83,6 @@ impl DatabaseConnection for DBM{
         return &mut self.connection
     }
 }
-#[async_trait]
-impl DatabaseManager for DBM{
-   async fn create_tables(&mut self, tables: Vec<&str>) -> Result<()>{
-       let mut tx = self.get_mut_connection().begin().await.unwrap();
-        for table in tables.iter(){
-           tx.execute(
-               sqlx::query(table)
-           ).await?;
-       }
-       tx.commit().await?;
-
-       Ok(())
-   }
-   async fn store_data(&mut self, q: &str) -> Result<(), Error>{
-       let mut tx = self.connection.begin().await.unwrap();
-       //tx.commit().await?;
-       let res = sqlx::query(q).
-                   execute(&mut tx)
-                   .await;
-        match res{
-            Ok(_) =>{
-                tx.commit().await?;   
-                Ok(())
-            }
-            Err(e) => Err(e)
-        }
-   }
-   async fn remove_data(&mut self, q: &str) -> Result<(), Error>{
-        let mut tx = self.connection.begin().await.unwrap();
-        let res = sqlx::query(q).
-                   execute(&mut tx)
-                   .await.unwrap().rows_affected();
-        //Error checking block to be implemented
-        match res{
-            0 => Err(()),
-            _ =>{
-                tx.commit().await?; 
-                Ok(())
-            }
-        } 
-   }
-   async fn update_data(&mut self, q: &str) -> Result<(), Error>{
-        self.remove_data(q).await
-   }
-
-}
-
-//Implement traits end
 
 impl DBM{
     //Creates a new DBM instance
