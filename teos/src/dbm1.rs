@@ -26,8 +26,8 @@ use crate::extended_appointment::{ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
 use crate::responder::{ConfirmationStatus, TransactionTracker};
 
-
-const TABLES: [&str; 5] = [
+//Sqlite tables
+const TABLES_SQLITE: [&str; 5] = [
     "CREATE TABLE IF NOT EXISTS users (
     user_id INT PRIMARY KEY,
     available_slots INT NOT NULL,
@@ -64,6 +64,45 @@ const TABLES: [&str; 5] = [
     key INT NOT NULL
 )",
 ];
+
+//Postgres Tables
+const TABLES_POSTGRES: [&str; 5] = [
+    "CREATE TABLE IF NOT EXISTS users (
+    user_id INT PRIMARY KEY,
+    available_slots INT NOT NULL,
+    subscription_expiry INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS appointments (
+    UUID INT PRIMARY KEY,
+    locator INT NOT NULL,
+    encrypted_blob BYTEA NOT NULL,
+    to_self_delay INT NOT NULL,
+    user_signature BYTEA NOT NULL,
+    start_block INT NOT NULL,
+    user_id INT NOT NULL,
+    FOREIGN KEY(user_id)
+        REFERENCES users(user_id)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS trackers (
+    UUID INT PRIMARY KEY,
+    dispute_tx BYTEA NOT NULL,
+    penalty_tx BYTEA NOT NULL,
+    height INT NOT NULL,
+    confirmed BOOL NOT NULL,
+    FOREIGN KEY(UUID)
+        REFERENCES appointments(UUID)
+        ON DELETE CASCADE
+)",
+    "CREATE TABLE IF NOT EXISTS last_known_block (
+    id INT PRIMARY KEY,
+    block_hash INT NOT NULL
+)",
+    "CREATE TABLE IF NOT EXISTS keys (
+    id SERIAL PRIMARY KEY,
+    key INT NOT NULL
+)",
+];
 //Traits
 
 #[derive(Debug)]
@@ -82,6 +121,9 @@ impl DatabaseConnection for DBM{
     fn get_mut_connection(&mut self) -> &mut AnyConnection{
         return &mut self.connection
     }
+    fn get_db_type(&self) -> i8{
+        return self.db_type
+    }
 }
 
 impl DBM{
@@ -91,7 +133,12 @@ impl DBM{
             connection,
             db_type
         };
-        let p = dbm.create_tables(Vec::from_iter(TABLES)).await?;
+        let p = dbm.create_tables(Vec::from_iter(
+            match db_type{
+                1 => TABLES_SQLITE,
+                _ => TABLES_POSTGRES
+            }
+        )).await?;
         println!("Created Table {:?}", p);
         Ok(dbm)
     }
@@ -119,7 +166,7 @@ impl DBM{
     }
 
     /// Updates an existing user ([UserInfo]) in the database.
-    pub(crate) async fn update_user(&mut self, user_id: UserId, user_info: &UserInfo) {
+    pub(crate) async fn update_user(&self, user_id: UserId, user_info: &UserInfo) {
         let query =
         format!(
             "UPDATE users SET available_slots=({}), subscription_expiry=({}) WHERE user_id=({})",
@@ -150,9 +197,9 @@ impl DBM{
 
         let mut appointments = HashMap::new();
         while let Some(inner_row) = rows.try_next().await.unwrap() {
-            let raw_uuid: Vec<u8> = inner_row.get(0).unwrap();
+            let raw_uuid: Vec<u8> = inner_row.get(0);
             let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
-            let e_blob: Vec<u8> = inner_row.get(1).unwrap();
+            let e_blob: Vec<u8> = inner_row.get(1);
 
             appointments.insert(
                 uuid,
@@ -166,20 +213,21 @@ impl DBM{
        /// Loads all users from the database.
        pub(crate) async fn load_all_users(&mut self) -> HashMap<UserId, UserInfo> {
         let mut users = HashMap::new();
-        let mut stmt = self.connection.begin().await.unwrap();
-        let mut rows =  
+        let mut tx = self.get_mut_connection().begin().await.unwrap();
+        let rows =  
             sqlx::query(
                 "SELECT * FROM users"
-            ).fetch(&mut stmt);
-        while let Some(row) = rows.try_next().await.unwrap(){
-            let raw_userid: Vec<u8> = row.get(0).unwrap();
+            ).fetch_all(&mut tx).await.unwrap();
+        drop(tx);
+        for row in rows{
+            let raw_userid: Vec<u8> = row.get(0);
             let user_id = UserId::from_slice(&raw_userid).unwrap();
-            let slots = row.get(1).unwrap();
-            let expiry = row.get(2).unwrap();
-
+            let slots:i32 = row.get(1);
+            let expiry:i32 = row.get(2);
+             
             users.insert(
                 user_id,
-                UserInfo::with_appointments(slots, expiry, self.load_user_appointments(user_id)),
+                UserInfo::with_appointments(slots as u32, expiry as u32, self.load_user_appointments(user_id).await), 
             );
         }
         users
@@ -279,7 +327,7 @@ impl DBM{
         let mut tx = self.connection.begin().await.unwrap();
         let q = format!(
             "SELECT * FROM appointments WHERE UUID=({})",
-            key
+                key
         );
        let row = sqlx::query(&q)
        .fetch_one(&mut tx)
@@ -305,28 +353,28 @@ impl DBM{
     }
 
        /// Loads all appointments from the database.
-    pub(crate) async fn load_all_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
+    pub(crate) async fn load_all_appointments(&mut self) -> HashMap<UUID, ExtendedAppointment> {
         let mut appointments = HashMap::new();
         let mut tx = self.connection.begin().await.unwrap();
         let mut rows = sqlx::query("SELECT * FROM appointments as a LEFT JOIN trackers as t ON a.UUID=t.UUID WHERE t.UUID IS NULL")
         .fetch(&mut tx);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let raw_uuid: Vec<u8> = row.get(0).unwrap();
+            let raw_uuid: Vec<u8> = row.get(0);
             let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
-            let raw_locator: Vec<u8> = row.get(1).unwrap();
+            let raw_locator: Vec<u8> = row.get(1);
             let locator = Locator::from_slice(&raw_locator).unwrap();
-            let raw_userid: Vec<u8> = row.get(6).unwrap();
+            let raw_userid: Vec<u8> = row.get(6);
             let user_id = UserId::from_slice(&raw_userid).unwrap();
 
-            let appointment = Appointment::new(locator, row.get(2).unwrap(), row.get(3).unwrap());
+            let appointment = Appointment::new(locator, row.get(2), row.get::<i32, usize>(3) as u32);
 
             appointments.insert(
                 uuid,
                 ExtendedAppointment::new(
                     appointment,
                     user_id,
-                    row.get(4).unwrap(),
-                    row.get(5).unwrap(),
+                    row.get(4),
+                    row.get::<i32, usize>(5) as u32,
                 ),
             );
         }
@@ -478,21 +526,21 @@ impl DBM{
     }
 
     /// Loads all trackers from the database.
-    pub(crate) async fn load_all_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+    pub(crate) async fn load_all_trackers(&mut self) -> HashMap<UUID, TransactionTracker> {
         let mut trackers = HashMap::new();
         let mut tx = self.connection.begin().await.unwrap();
         let mut rows = sqlx::query("SELECT t.*, a.user_id FROM trackers as t INNER JOIN appointments as a ON t.UUID=a.UUID")
         .fetch(&mut tx);
         while let Some(row) = rows.try_next().await.unwrap() {
-            let raw_uuid: Vec<u8> = row.get(0).unwrap();
+            let raw_uuid: Vec<u8> = row.get(0);
             let uuid = UUID::from_slice(&raw_uuid[0..20]).unwrap();
-            let raw_dispute_tx: Vec<u8> = row.get(1).unwrap();
+            let raw_dispute_tx: Vec<u8> = row.get(1);
             let dispute_tx = consensus::deserialize(&raw_dispute_tx).unwrap();
-            let raw_penalty_tx: Vec<u8> = row.get(2).unwrap();
+            let raw_penalty_tx: Vec<u8> = row.get(2);
             let penalty_tx = consensus::deserialize(&raw_penalty_tx).unwrap();
-            let height: u32 = row.get(3).unwrap();
-            let confirmed: bool = row.get(4).unwrap();
-            let raw_userid: Vec<u8> = row.get(5).unwrap();
+            let height:i32 = row.get(3);
+            let confirmed: bool = row.get(4);
+            let raw_userid: Vec<u8> = row.get(5);
             let user_id = UserId::from_slice(&raw_userid).unwrap();
 
             trackers.insert(
@@ -500,7 +548,7 @@ impl DBM{
                 TransactionTracker {
                     dispute_tx,
                     penalty_tx,
-                    status: ConfirmationStatus::from_db_data(height, confirmed),
+                    status: ConfirmationStatus::from_db_data(height as u32, confirmed),
                     user_id,
                 },
             );
@@ -527,7 +575,7 @@ impl DBM{
     }
 
     /// Loads the last known block from the database.
-    pub async fn load_last_known_block(&self) -> Option<BlockHash> {
+    pub async fn load_last_known_block(&mut self) -> Option<BlockHash> {
         let mut tx = self.connection.begin().await.unwrap();
         let q = format!(
             "SELECT block_hash FROM last_known_block WHERE id=0"
@@ -537,7 +585,7 @@ impl DBM{
        .await;
        match row{
             Ok(row) => {
-                let raw_hash: Vec<u8> = row.get(0).unwrap();
+                let raw_hash: Vec<u8> = row.get(0);
                 Some(BlockHash::from_slice(&raw_hash).unwrap())
             }
             Err(_) => {
@@ -598,7 +646,7 @@ impl DBM{
 async fn main() -> Result<()>{
     let con1 = AnyConnection::connect("postgres://postgres:arsalan@localhost/postgres").await?;
     let con2 = AnyConnection::connect("sqlite::memory:").await?;
-    let mut a    = DBM::new(con1, 1).await?;
+    let mut a = DBM::new(con1, 1).await?;
     let p = a.load_tower_key().await;
   Ok(())
 }

@@ -9,6 +9,8 @@ pub trait DatabaseConnection{
     fn get_connection(&self) -> &AnyConnection;
 
     fn get_mut_connection(&mut self) -> &mut AnyConnection;
+
+    fn get_db_type(&self) -> i8;
 }
 #[async_trait]
 pub trait DatabaseManager: Sized {
