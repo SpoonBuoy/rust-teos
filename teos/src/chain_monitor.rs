@@ -79,6 +79,7 @@ where
                             .lock()
                             .unwrap()
                             .store_last_known_block(&new_best.header.block_hash())
+                            .await
                             .unwrap();
                     }
                     ChainTip::Worse(worse) => {
@@ -174,7 +175,7 @@ mod tests {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
         let tip = chain.tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -198,7 +199,7 @@ mod tests {
         let new_tip = chain.tip();
         let old_tip = chain.at_height(START_HEIGHT - 1);
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -221,7 +222,7 @@ mod tests {
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, new_tip);
         assert_eq!(
-            cm.dbm.lock().unwrap().load_last_known_block().unwrap(),
+            cm.dbm.lock().unwrap().load_last_known_block().await.unwrap(),
             new_tip.deref().header.block_hash()
         );
         assert!(listener
@@ -237,7 +238,7 @@ mod tests {
         let best_tip = chain.tip();
         chain.disconnect_tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -260,7 +261,7 @@ mod tests {
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, best_tip);
         assert!(matches!(
-            cm.dbm.lock().unwrap().load_last_known_block(),
+            cm.dbm.lock().unwrap().load_last_known_block().await,
             Err { .. }
         ));
         assert!(listener.connected_blocks.borrow().is_empty());
@@ -279,7 +280,7 @@ mod tests {
 
         let new_best = chain.tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 
@@ -302,7 +303,7 @@ mod tests {
         cm.poll_best_tip().await;
         assert_eq!(cm.last_known_block_header, new_best);
         assert_eq!(
-            cm.dbm.lock().unwrap().load_last_known_block().unwrap(),
+            cm.dbm.lock().unwrap().load_last_known_block().await.unwrap(),
             new_best.deref().header.block_hash()
         );
         assert_eq!(*listener.connected_blocks.borrow(), new_blocks);
@@ -318,7 +319,7 @@ mod tests {
         let chain_offline = chain.unreachable.clone();
         let tip = chain.tip();
 
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         let (_, shutdown_signal) = triggered::trigger();
         let listener = DummyListener::new();
 

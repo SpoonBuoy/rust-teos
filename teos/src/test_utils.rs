@@ -375,11 +375,14 @@ pub(crate) fn get_random_tracker(
 pub(crate) fn store_appointment_and_fks_to_db(
     dbm: &DBM,
     uuid: UUID,
-    appointment: &ExtendedAppointment,
+    appointment: &'static ExtendedAppointment,
 ) {
-    dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
-        .unwrap();
-    dbm.store_appointment(uuid, appointment).unwrap();
+    futures::executor::block_on(
+        dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
+    ).unwrap();
+    futures::executor::block_on(
+        dbm.store_appointment(uuid, appointment)
+    ).unwrap();
 }
 
 pub(crate) async fn get_last_n_blocks(chain: &mut Blockchain, n: usize) -> Vec<ValidatedBlock> {
@@ -417,7 +420,7 @@ pub(crate) fn create_carrier(query: MockedServerQuery, height: u32) -> Carrier {
     Carrier::new(bitcoin_cli, bitcoind_reachable, height)
 }
 
-pub(crate) fn create_responder(
+pub(crate) async fn create_responder(
     tip: ValidatedBlockHeader,
     gatekeeper: Arc<Gatekeeper>,
     dbm: Arc<Mutex<DBM>>,
@@ -427,7 +430,7 @@ pub(crate) fn create_responder(
     let bitcoind_reachable = Arc::new((Mutex::new(true), Condvar::new()));
     let carrier = Carrier::new(bitcoin_cli, bitcoind_reachable, tip.deref().height);
 
-    Responder::new(carrier, gatekeeper, dbm)
+    Responder::new(carrier, gatekeeper, dbm).await
 }
 
 pub(crate) async fn create_watcher(
@@ -450,7 +453,7 @@ pub(crate) async fn create_watcher(
         tower_sk,
         tower_id,
         dbm,
-    )
+    ).await
 }
 #[derive(Clone)]
 pub(crate) struct ApiConfig {
@@ -488,15 +491,15 @@ pub(crate) async fn create_api_with_config(api_config: ApiConfig) -> Arc<Interna
     let bitcoind_mock = BitcoindMock::new(MockOptions::empty());
     let mut chain = Blockchain::default().with_height(START_HEIGHT);
 
-    let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+    let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
     let gk = Arc::new(Gatekeeper::new(
         chain.get_block_count(),
         api_config.slots,
         api_config.duration,
         EXPIRY_DELTA,
         dbm.clone(),
-    ));
-    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
+    ).await);
+    let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
     let watcher = create_watcher(
         &mut chain,
         Arc::new(responder),

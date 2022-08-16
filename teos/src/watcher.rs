@@ -258,7 +258,7 @@ pub struct Watcher {
 
 impl Watcher {
     /// Creates a new [Watcher] instance.
-    pub fn new(
+    pub async fn new(
         gatekeeper: Arc<Gatekeeper>,
         responder: Arc<Responder>,
         last_n_blocks: Vec<ValidatedBlock>,
@@ -269,7 +269,7 @@ impl Watcher {
     ) -> Self {
         let mut appointments = HashMap::new();
         let mut locator_uuid_map: HashMap<Locator, HashSet<UUID>> = HashMap::new();
-        for (uuid, appointment) in dbm.lock().unwrap().load_all_appointments() {
+        for (uuid, appointment) in dbm.lock().unwrap().load_all_appointments().await {
             appointments.insert(uuid, appointment.get_summary());
 
             if let Some(map) = locator_uuid_map.get_mut(&appointment.locator()) {
@@ -299,8 +299,8 @@ impl Watcher {
 
     /// Registers a new user within the [Watcher]. This request is passed to the [Gatekeeper], who is in
     /// charge of managing users.
-    pub(crate) fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
-        let mut receipt = self.gatekeeper.add_update_user(user_id)?;
+    pub(crate) async fn register(&self, user_id: UserId) -> Result<RegistrationReceipt, MaxSlotsReached> {
+        let mut receipt = self.gatekeeper.add_update_user(user_id).await?;
         receipt.sign(&self.signing_key);
 
         Ok(receipt)
@@ -335,7 +335,7 @@ impl Watcher {
             return Err(AddAppointmentFailure::SubscriptionExpired(expiry));
         }
 
-        let extended_appointment = ExtendedAppointment::new(
+        let mut extended_appointment = ExtendedAppointment::new(
             appointment,
             user_id,
             user_signature,
@@ -386,10 +386,10 @@ impl Watcher {
     /// Stores an appointment in the [Watcher] memory and into the database (or updates it if it already exists).
     ///
     /// Data is stored in `locator_uuid_map` and `appointments`.
-    fn store_appointment(
+    async fn store_appointment(
         &self,
         uuid: UUID,
-        appointment: &ExtendedAppointment,
+        appointment: & 'static ExtendedAppointment,
     ) -> StoredAppointment {
         self.appointments
             .lock()
@@ -404,6 +404,7 @@ impl Watcher {
                 .lock()
                 .unwrap()
                 .store_appointment(uuid, appointment)
+                .await
                 .unwrap();
             StoredAppointment::New
         } else {
@@ -422,6 +423,7 @@ impl Watcher {
                     .lock()
                     .unwrap()
                     .store_appointment(uuid, appointment)
+                    .await
                     .unwrap();
                 StoredAppointment::Collision
             } else {
@@ -439,10 +441,10 @@ impl Watcher {
     ///
     /// If the appointment is rejected by the [Responder] (i.e. for being invalid), the data is wiped
     /// from the database but the slot is not freed.
-    fn store_triggered_appointment(
+    async fn store_triggered_appointment(
         &self,
         uuid: UUID,
-        appointment: &ExtendedAppointment,
+        appointment: &'static ExtendedAppointment,
         user_id: UserId,
         dispute_tx: &Transaction,
     ) -> TriggeredAppointment {
@@ -458,6 +460,7 @@ impl Watcher {
                     .lock()
                     .unwrap()
                     .store_appointment(uuid, appointment)
+                    .await
                     .unwrap();
 
                 if let ConfirmationStatus::Rejected(reason) = self.responder.handle_breach(
@@ -498,7 +501,7 @@ impl Watcher {
     /// - The user subscription has not expired
     /// - The appointment belongs to the user
     /// - The appointment exists within the system (either in the [Watcher] or the [Responder])
-    pub(crate) fn get_appointment(
+    pub(crate) async fn get_appointment(
         &self,
         locator: Locator,
         user_signature: &str,
@@ -525,12 +528,14 @@ impl Watcher {
                     .lock()
                     .unwrap()
                     .load_appointment(uuid)
+                    .await
                     .unwrap()
                     .inner,
             ))
         } else {
             self.responder
                 .get_tracker(uuid)
+                .await
                 .map(AppointmentInfo::Tracker)
                 .ok_or({
                     log::info!("Cannot find {}", locator);
@@ -575,7 +580,7 @@ impl Watcher {
     /// Filters a map of breaches between those that are valid and those that are not.
     ///
     /// Valid breaches are those resulting in a properly formatted [Transaction] once decrypted.
-    fn filter_breaches(
+    async fn filter_breaches(
         &self,
         breaches: HashMap<Locator, Transaction>,
     ) -> (
@@ -589,10 +594,10 @@ impl Watcher {
         let mut decrypted_blobs: HashMap<Vec<u8>, Transaction> = HashMap::new();
 
         let locator_uuid_map = self.locator_uuid_map.lock().unwrap();
-        let dbm = self.dbm.lock().unwrap();
+        let mut dbm = self.dbm.lock().unwrap();
         for (locator, dispute_tx) in breaches.into_iter() {
             for uuid in locator_uuid_map.get(&locator).unwrap() {
-                let appointment = dbm.load_appointment(*uuid).unwrap();
+                let appointment = dbm.load_appointment(*uuid).await.unwrap();
                 match decrypted_blobs.get(appointment.encrypted_blob()) {
                     Some(penalty_tx) => {
                         valid_breaches
@@ -701,13 +706,13 @@ impl Watcher {
     }
 
     /// Gets all the appointments stored in the [Watcher] (from the database).
-    pub(crate) fn get_all_watcher_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
-        self.dbm.lock().unwrap().load_all_appointments()
+    pub(crate) async fn get_all_watcher_appointments(&self) -> HashMap<UUID, ExtendedAppointment> {
+        self.dbm.lock().unwrap().load_all_appointments().await
     }
 
     /// Gets all the trackers stored in the [Responder] (from the database).
-    pub(crate) fn get_all_responder_trackers(&self) -> HashMap<UUID, TransactionTracker> {
-        self.dbm.lock().unwrap().load_all_trackers()
+    pub(crate) async fn get_all_responder_trackers(&self) -> HashMap<UUID, TransactionTracker> {
+        self.dbm.lock().unwrap().load_all_trackers().await
     }
 
     /// Gets the list of all registered user ids.
@@ -721,7 +726,7 @@ impl Watcher {
     }
 
     /// Gets information about a user's subscription.
-    pub(crate) fn get_subscription_info(
+    pub(crate) async fn get_subscription_info(
         &self,
         signature: &str,
     ) -> Result<(UserInfo, Vec<Locator>), GetSubscriptionInfoFailure> {
@@ -743,13 +748,13 @@ impl Watcher {
         let mut locators = Vec::new();
 
         let appointments = self.appointments.lock().unwrap();
-        let dbm = self.dbm.lock().unwrap();
+        let mut dbm = self.dbm.lock().unwrap();
         for uuid in subscription_info.appointments.keys() {
             match appointments.get(uuid) {
                 Some(a) => locators.push(a.locator),
                 None => {
                     if self.responder.has_tracker(*uuid) {
-                        match dbm.load_locator(*uuid) {
+                        match dbm.load_locator(*uuid).await{
                             Ok(locator) => locators.push(locator),
                             Err(_) => log::error!(
                                 "Tracker found in Responder but not in DB (uuid = {})",
@@ -799,11 +804,12 @@ impl chain::Listen for Watcher {
             self.delete_appointments_from_memory(
                 &self.gatekeeper.get_outdated_appointments(height),
                 DeletionReason::Outdated,
-            );
+            )
+            ;
 
             // Filter out those breaches that do not yield a valid transaction
             let (valid_breaches, invalid_breaches) =
-                self.filter_breaches(self.get_breaches(locator_tx_map));
+                futures::executor::block_on( self.filter_breaches(self.get_breaches(locator_tx_map)));
 
             // Send data to the Responder
             let mut appointments_to_delete = HashSet::from_iter(invalid_breaches.into_keys());
@@ -905,7 +911,7 @@ mod tests {
     }
 
     async fn init_watcher(chain: &mut Blockchain) -> Watcher {
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         init_watcher_with_db(chain, dbm).await
     }
 
@@ -918,16 +924,16 @@ mod tests {
             DURATION,
             EXPIRY_DELTA,
             dbm.clone(),
-        ));
-        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url());
-        create_watcher(
+        ).await);
+        let responder = create_responder(chain.tip(), gk.clone(), dbm.clone(), bitcoind_mock.url()).await;
+        return create_watcher(
             chain,
             Arc::new(responder),
             gk.clone(),
             bitcoind_mock,
             dbm.clone(),
         )
-        .await
+        .await;
     }
 
     fn assert_appointment_added(
@@ -1067,13 +1073,13 @@ mod tests {
     async fn test_new() {
         // A fresh watcher has no associated data
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
         let watcher = init_watcher_with_db(&mut chain, dbm.clone()).await;
         assert!(watcher.is_fresh());
 
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        watcher.register(user_id).unwrap();
+        watcher.register(user_id).await.unwrap();
         let appointment = generate_dummy_appointment(None).inner;
 
         // If we add some trackers to the system and create a new Responder reusing the same db
@@ -1102,7 +1108,7 @@ mod tests {
 
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        let receipt = watcher.register(user_id).unwrap();
+        let receipt = watcher.register(user_id).await.unwrap();
 
         assert_eq!(receipt.user_id(), user_id);
         assert_eq!(receipt.available_slots(), SLOTS);
@@ -1140,7 +1146,7 @@ mod tests {
         ));
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        watcher.register(user_id).unwrap();
+        watcher.register(user_id).await.unwrap();
         let appointment = generate_dummy_appointment(None).inner;
 
         // Add the appointment for a new user (twice so we can check that updates work)
@@ -1156,7 +1162,7 @@ mod tests {
         // Add the same appointment but for another user
         let (user2_sk, user2_pk) = get_random_keypair();
         let user2_id = UserId(user2_pk);
-        watcher.register(user2_id).unwrap();
+        watcher.register(user2_id).await.unwrap();
 
         let user2_sig = cryptography::sign(&appointment.to_vec(), &user2_sk).unwrap();
         let (receipt, slots, expiry) = watcher
@@ -1175,7 +1181,7 @@ mod tests {
         // Check data was added to the database
         for uuid in watcher.appointments.lock().unwrap().keys() {
             assert!(matches!(
-                watcher.dbm.lock().unwrap().load_appointment(*uuid),
+                watcher.dbm.lock().unwrap().load_appointment(*uuid).await,
                 Ok(ExtendedAppointment { .. })
             ));
         }
@@ -1224,11 +1230,11 @@ mod tests {
 
         // Check data was added to the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Ok(ExtendedAppointment { .. })
         ));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            watcher.dbm.lock().unwrap().load_tracker(uuid).await,
             Ok(TransactionTracker { .. })
         ));
 
@@ -1248,11 +1254,11 @@ mod tests {
 
         // Data should not be in the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            watcher.dbm.lock().unwrap().load_tracker(uuid).await,
             Err(DBError::NotFound)
         ));
 
@@ -1275,7 +1281,7 @@ mod tests {
 
         // Data should not be in the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
 
@@ -1291,7 +1297,7 @@ mod tests {
         ));
         // Data should not be in the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
 
@@ -1316,7 +1322,7 @@ mod tests {
         ));
         // Data should not be in the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
 
@@ -1336,7 +1342,7 @@ mod tests {
         ));
         // Data should not be in the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
     }
@@ -1349,13 +1355,13 @@ mod tests {
         // Register the user
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        watcher.register(user_id).unwrap();
+        watcher.register(user_id).await.unwrap();
 
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
 
         // Storing a new appointment should return New
         assert_eq!(
-            watcher.store_appointment(uuid, &appointment),
+            watcher.store_appointment(uuid, &appointment).await,
             StoredAppointment::New,
         );
         assert_eq!(
@@ -1370,7 +1376,7 @@ mod tests {
         // Adding an appointment with the same UUID should be seen as an updated
         // The appointment data here does not matter much, just the UUID and the locator since they are tied to each other.
         assert_eq!(
-            watcher.store_appointment(uuid, &appointment),
+            watcher.store_appointment(uuid, &appointment).await,
             StoredAppointment::Update,
         );
         assert_eq!(
@@ -1386,7 +1392,7 @@ mod tests {
         // This means that a different user is sending an appointment with the same locator.
         let new_uuid = generate_uuid();
         assert_eq!(
-            watcher.store_appointment(new_uuid, &appointment),
+            watcher.store_appointment(new_uuid, &appointment).await,
             StoredAppointment::Collision,
         );
         assert_eq!(
@@ -1410,7 +1416,7 @@ mod tests {
         // Register the user
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        watcher.register(user_id).unwrap();
+        watcher.register(user_id).await.unwrap();
 
         let dispute_tx = get_random_tx();
         let (uuid, appointment) =
@@ -1418,13 +1424,13 @@ mod tests {
 
         // Valid triggered appointments should be accepted by the Responder
         assert_eq!(
-            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx).await,
             TriggeredAppointment::Accepted,
         );
         // In this case the appointment is kept in the Responder and, therefore, in the database
         assert!(watcher.responder.has_tracker(uuid));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Ok(ExtendedAppointment { .. })
         ));
 
@@ -1438,13 +1444,13 @@ mod tests {
         let (uuid, appointment) =
             generate_dummy_appointment_with_user(user_id, Some(&dispute_tx.txid()));
         assert_eq!(
-            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx),
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &dispute_tx).await,
             TriggeredAppointment::Rejected,
         );
         // In this case the appointment is not kept in the Responder nor in the database
         assert!(!watcher.responder.has_tracker(uuid));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err { .. }
         ));
 
@@ -1453,13 +1459,13 @@ mod tests {
         // (the same applies to invalid formatted transactions)
         let uuid = generate_uuid();
         assert_eq!(
-            watcher.store_triggered_appointment(uuid, &appointment, user_id, &get_random_tx()),
+            watcher.store_triggered_appointment(uuid, &appointment, user_id, &get_random_tx()).await,
             TriggeredAppointment::Invalid,
         );
         // The appointment is not kept anywhere
         assert!(!watcher.responder.has_tracker(uuid));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err { .. }
         ));
     }
@@ -1474,14 +1480,14 @@ mod tests {
         //  If the user cannot be properly identified, the request will fail. This can be simulated by providing a wrong signature
         let wrong_sig = String::from_utf8((0..65).collect()).unwrap();
         assert!(matches!(
-            watcher.get_appointment(appointment.locator, &wrong_sig),
+            watcher.get_appointment(appointment.locator, &wrong_sig).await,
             Err(GetAppointmentFailure::AuthenticationFailure)
         ));
 
         // If the user does exist and there's an appointment with the given locator belonging to him, it will be returned
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        watcher.register(user_id).unwrap();
+        watcher.register(user_id).await.unwrap();
         watcher
             .add_appointment(
                 appointment.clone(),
@@ -1493,6 +1499,7 @@ mod tests {
         let signature = cryptography::sign(message.as_bytes(), &user_sk).unwrap();
         let info = watcher
             .get_appointment(appointment.locator, &signature)
+            .await
             .unwrap();
 
         match info {
@@ -1532,6 +1539,7 @@ mod tests {
         let tracker_signature = cryptography::sign(tracker_message.as_bytes(), &user_sk).unwrap();
         let info = watcher
             .get_appointment(appointment.locator, &tracker_signature)
+            .await
             .unwrap();
 
         match info {
@@ -1545,11 +1553,11 @@ mod tests {
         // should be returned.
         let (user2_sk, user2_pk) = get_random_keypair();
         let user2_id = UserId(user2_pk);
-        watcher.register(user2_id).unwrap();
+        watcher.register(user2_id).await.unwrap();
 
         let signature2 = cryptography::sign(message.as_bytes(), &user2_sk).unwrap();
         assert!(matches!(
-            watcher.get_appointment(appointment.locator, &signature2),
+            watcher.get_appointment(appointment.locator, &signature2).await,
             Err(GetAppointmentFailure::NotFound { .. })
         ));
 
@@ -1564,7 +1572,7 @@ mod tests {
             .subscription_expiry = START_HEIGHT as u32;
 
         assert!(matches!(
-            watcher.get_appointment(appointment.locator, &signature),
+            watcher.get_appointment(appointment.locator, &signature).await,
             Err(GetAppointmentFailure::SubscriptionExpired { .. })
         ));
     }
@@ -1651,7 +1659,7 @@ mod tests {
         }
 
         let breaches = watcher.get_breaches(locator_tx_map.clone());
-        let (valid, invalid) = watcher.filter_breaches(breaches);
+        let (valid, invalid) = futures::executor::block_on(watcher.filter_breaches(breaches));
 
         // Check valid + invalid add up to 2/3
         assert_eq!(2 * locator_tx_map.len() / 3, valid.len() + invalid.len());
@@ -1714,7 +1722,7 @@ mod tests {
 
             // But it can be found in the database
             assert!(matches!(
-                watcher.dbm.lock().unwrap().load_appointment(uuid),
+                watcher.dbm.lock().unwrap().load_appointment(uuid).await,
                 Ok(ExtendedAppointment { .. })
             ));
         }
@@ -1791,7 +1799,7 @@ mod tests {
             if target_appointments.contains(&uuid) {
                 assert!(!watcher.appointments.lock().unwrap().contains_key(&uuid));
                 assert!(matches!(
-                    watcher.dbm.lock().unwrap().load_appointment(uuid),
+                    watcher.dbm.lock().unwrap().load_appointment(uuid).await,
                     Err(DBError::NotFound)
                 ));
 
@@ -1825,7 +1833,7 @@ mod tests {
                     .unwrap()
                     .contains_key(&uuid_locator_map[&uuid]));
                 assert!(matches!(
-                    watcher.dbm.lock().unwrap().load_appointment(uuid),
+                    watcher.dbm.lock().unwrap().load_appointment(uuid).await,
                     Ok(ExtendedAppointment { .. })
                 ));
             }
@@ -1839,6 +1847,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .load_user(id)
+                    .await
                     .unwrap()
                     .available_slots,
                 info.available_slots
@@ -1878,8 +1887,8 @@ mod tests {
         let user_id = UserId(user_pk);
         let (user2_sk, user2_pk) = get_random_keypair();
         let user2_id = UserId(user2_pk);
-        watcher.register(user_id).unwrap();
-        watcher.register(user2_id).unwrap();
+        watcher.register(user_id).await.unwrap();
+        watcher.register(user2_id).await.unwrap();
 
         let appointment = generate_dummy_appointment(None);
         let uuid1 = UUID::new(appointment.locator(), user_id);
@@ -1933,7 +1942,7 @@ mod tests {
                 .contains_key(&uuid1)
         );
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid1),
+            watcher.dbm.lock().unwrap().load_appointment(uuid1).await,
             Ok(ExtendedAppointment { .. })
         ));
 
@@ -1945,7 +1954,7 @@ mod tests {
                 .contains_key(&uuid2)
         );
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid2),
+            watcher.dbm.lock().unwrap().load_appointment(uuid2).await,
             Ok(ExtendedAppointment { .. })
         ));
 
@@ -1979,11 +1988,11 @@ mod tests {
 
         // Data should have been kept in the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Ok(ExtendedAppointment { .. })
         ));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            watcher.dbm.lock().unwrap().load_tracker(uuid).await,
             Ok(TransactionTracker { .. })
         ));
 
@@ -2020,11 +2029,11 @@ mod tests {
         );
         // Data should also have been deleted from the database
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_tracker(uuid),
+            watcher.dbm.lock().unwrap().load_tracker(uuid).await,
             Err(DBError::NotFound)
         ));
 
@@ -2059,7 +2068,7 @@ mod tests {
                 .contains_key(&uuid)
         );
         assert!(matches!(
-            watcher.dbm.lock().unwrap().load_appointment(uuid),
+            watcher.dbm.lock().unwrap().load_appointment(uuid).await,
             Err(DBError::NotFound)
         ));
     }

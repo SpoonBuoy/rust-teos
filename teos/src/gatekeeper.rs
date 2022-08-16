@@ -89,14 +89,14 @@ pub struct Gatekeeper {
 
 impl Gatekeeper {
     /// Creates a new [Gatekeeper] instance.
-    pub fn new(
+    pub async fn new(
         last_known_block_height: u32,
         subscription_slots: u32,
         subscription_duration: u32,
         expiry_delta: u32,
         dbm: Arc<Mutex<DBM>>,
     ) -> Self {
-        let registered_users = dbm.lock().unwrap().load_all_users();
+        let registered_users = dbm.lock().unwrap().load_all_users().await;
         Gatekeeper {
             last_known_block_height: AtomicU32::new(last_known_block_height),
             subscription_slots,
@@ -154,7 +154,7 @@ impl Gatekeeper {
     }
 
     /// Adds a new user to the tower (or updates its subscription if already registered).
-    pub(crate) fn add_update_user(
+    pub(crate) async fn add_update_user(
         &self,
         user_id: UserId,
     ) -> Result<RegistrationReceipt, MaxSlotsReached> {
@@ -184,6 +184,7 @@ impl Gatekeeper {
                     .lock()
                     .unwrap()
                     .store_user(user_id, &user_info)
+                    .await
                     .unwrap();
 
                 registered_users.insert(user_id, user_info);
@@ -363,13 +364,13 @@ mod tests {
             &self.registered_users
         }
 
-        pub(crate) fn add_outdated_user(
+        pub(crate) async fn add_outdated_user(
             &self,
             user_id: UserId,
             outdates_at: u32,
             appointments: Option<Vec<UUID>>,
         ) {
-            self.add_update_user(user_id).unwrap();
+            self.add_update_user(user_id).await.unwrap();
             let mut registered_users = self.registered_users.lock().unwrap();
             let mut user = registered_users.get_mut(&user_id).unwrap();
             user.subscription_expiry = outdates_at - self.expiry_delta;
@@ -381,16 +382,16 @@ mod tests {
         }
     }
 
-    fn init_gatekeeper(chain: &Blockchain) -> Gatekeeper {
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
-        Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm)
+    async fn init_gatekeeper(chain: &Blockchain) -> Gatekeeper {
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
+        Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm).await
     }
 
-    #[test]
-    fn test_new() {
+    #[tokio::test]
+    async fn test_new() {
         // A fresh gatekeeper has no associated data
         let chain = Blockchain::default().with_height(START_HEIGHT);
-        let dbm = Arc::new(Mutex::new(DBM::in_memory().unwrap()));
+        let dbm = Arc::new(Mutex::new(DBM::in_memory().await.unwrap()));
 
         let gatekeeper = Gatekeeper::new(
             chain.get_block_count(),
@@ -398,14 +399,14 @@ mod tests {
             DURATION,
             EXPIRY_DELTA,
             dbm.clone(),
-        );
+        ).await;
         assert!(gatekeeper.is_fresh());
 
         // If we add some users and appointments to the system and create a new Gatekeeper reusing the same db
         // (as if simulating a bootstrap from existing data), the data should be properly loaded.
         for _ in 0..10 {
             let user_id = get_random_user_id();
-            gatekeeper.add_update_user(user_id).unwrap();
+            gatekeeper.add_update_user(user_id).await.unwrap();
 
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
             gatekeeper
@@ -417,19 +418,20 @@ mod tests {
                 .lock()
                 .unwrap()
                 .store_appointment(uuid, &appointment)
+                .await
                 .unwrap();
         }
 
         // Create a new GK reusing the same DB and check that the data is loaded
         let another_gk =
-            Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm);
+            Gatekeeper::new(chain.get_block_count(), SLOTS, DURATION, EXPIRY_DELTA, dbm).await;
         assert!(!another_gk.is_fresh());
         assert_eq!(gatekeeper, another_gk);
     }
 
-    #[test]
-    fn test_authenticate_user() {
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
+    #[tokio::test]
+    async fn test_authenticate_user() {
+        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT)).await;
 
         // Authenticate user returns the UserId if the user is found in the system, or an AuthenticationError otherwise.
 
@@ -451,27 +453,27 @@ mod tests {
 
         // Last, let's add the user to the Gatekeeper and try again.
         let user_id = UserId(user_pk);
-        gatekeeper.add_update_user(user_id).unwrap();
+        gatekeeper.add_update_user(user_id).await.unwrap();
         assert_eq!(
             gatekeeper.authenticate_user(message, &signature),
             Ok(user_id)
         );
     }
 
-    #[test]
-    fn test_add_update_user() {
+    #[tokio::test]
+    async fn test_add_update_user() {
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let gatekeeper = init_gatekeeper(&chain);
+        let gatekeeper = init_gatekeeper(&chain).await;
 
         // add_update_user adds a user to the system if it is not still registered, otherwise it add slots to the user subscription
         // and refreshes the subscription expiry. Slots are added up to u32:MAX, further call will return an MaxSlotsReached error.
 
         // Let's start by adding new user
         let user_id = get_random_user_id();
-        let receipt = gatekeeper.add_update_user(user_id).unwrap();
+        let receipt = gatekeeper.add_update_user(user_id).await.unwrap();
         // The data should have been also added to the database
         assert_eq!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
+            gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap(),
             UserInfo::new(receipt.available_slots(), receipt.subscription_expiry())
         );
 
@@ -480,7 +482,7 @@ mod tests {
         gatekeeper
             .last_known_block_height
             .store(chain.get_block_count(), Ordering::Relaxed);
-        let updated_receipt = gatekeeper.add_update_user(user_id).unwrap();
+        let updated_receipt = gatekeeper.add_update_user(user_id).await.unwrap();
 
         assert_eq!(
             updated_receipt.available_slots(),
@@ -493,7 +495,7 @@ mod tests {
 
         // Data in the database should have been updated too
         assert_eq!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
+            gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap(),
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_expiry()
@@ -510,13 +512,13 @@ mod tests {
             .available_slots = u32::MAX;
 
         assert!(matches!(
-            gatekeeper.add_update_user(user_id),
+            gatekeeper.add_update_user(user_id).await,
             Err(MaxSlotsReached)
         ));
 
         // Data in the database remains untouched
         assert_eq!(
-            gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap(),
+            gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap(),
             UserInfo::new(
                 updated_receipt.available_slots(),
                 updated_receipt.subscription_expiry()
@@ -524,16 +526,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_add_update_appointment() {
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
+    #[tokio::test]
+    async fn test_add_update_appointment() {
+        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT)).await;
 
         // if a given appointment is not associated with a given user, add_update_appointment adds the appointment user appointments alongside the number os slots it consumes. If the appointment
         // is already associated with the user, it will update it (both data and slot count).
 
         // Let's first add the a user to the Gatekeeper (inputs are always sanitized here, so we don't need tests for non-registered users)
         let user_id = get_random_user_id();
-        gatekeeper.add_update_user(user_id).unwrap();
+        gatekeeper.add_update_user(user_id).await.unwrap();
 
         // Now let's add a new appointment
         let slots_before = gatekeeper
@@ -555,7 +557,7 @@ mod tests {
 
         // Slots should have been updated in the database too. Notice the appointment won't be there yet
         // given the Watcher is responsible for adding it, and it will do so after calling this method
-        let mut loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        let mut loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, available_slots);
 
         // Adding the exact same appointment should leave the slots count unchanged
@@ -566,7 +568,7 @@ mod tests {
             .appointments
             .contains_key(&uuid));
         assert_eq!(updated_slot_count, available_slots);
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // If we add an update to an existing appointment with a bigger data blob (modulo ENCRYPTED_BLOB_MAX_SIZE), additional slots should be taken
@@ -579,7 +581,7 @@ mod tests {
             .appointments
             .contains_key(&uuid));
         assert_eq!(updated_slot_count, available_slots - 1);
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // Adding back a smaller update (modulo ENCRYPTED_BLOB_MAX_SIZE) should reduce the count
@@ -590,7 +592,7 @@ mod tests {
             .appointments
             .contains_key(&uuid));
         assert_eq!(updated_slot_count, available_slots);
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // Adding an appointment with a different uuid should not count as an update
@@ -602,7 +604,7 @@ mod tests {
             .appointments
             .contains_key(&new_uuid));
         assert_eq!(updated_slot_count, available_slots - 1);
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
 
         // Finally, trying to add an appointment when the user has no enough slots should fail
@@ -618,13 +620,13 @@ mod tests {
             Err(NotEnoughSlots)
         ));
         // The entry in the database should remain unchanged in this case
-        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).unwrap();
+        loaded_user = gatekeeper.dbm.lock().unwrap().load_user(user_id).await.unwrap();
         assert_eq!(loaded_user.available_slots, updated_slot_count);
     }
 
-    #[test]
-    fn test_has_subscription_expired() {
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
+    #[tokio::test]
+    async fn test_has_subscription_expired() {
+        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT)).await;
 
         // If the user is not registered, querying for a subscription expiry check should return an error
         let user_id = get_random_user_id();
@@ -634,7 +636,7 @@ mod tests {
         ));
 
         // If the user is registered and the subscription is active we should get (false, expiry)
-        gatekeeper.add_update_user(user_id).unwrap();
+        gatekeeper.add_update_user(user_id).await.unwrap();
         assert_eq!(
             gatekeeper.has_subscription_expired(user_id),
             Ok((false, DURATION + START_HEIGHT as u32))
@@ -655,10 +657,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_get_outdated_users() {
+    #[tokio::test]
+    async fn test_get_outdated_users() {
         let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize));
+        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize)).await;
 
         // Initially, there are not outdated users, so querying any block height should return an empty map
         for i in 0..start_height {
@@ -667,7 +669,7 @@ mod tests {
 
         // Adding a user whose subscription is outdated should return an entry
         let user_id = get_random_user_id();
-        gatekeeper.add_update_user(user_id).unwrap();
+        gatekeeper.add_update_user(user_id).await.unwrap();
 
         // Add also an appointment so we can check the returned data
         let appointment = generate_dummy_appointment(None);
@@ -686,10 +688,10 @@ mod tests {
         assert_eq!(outdated_users[&user_id], HashSet::from_iter([uuid]));
     }
 
-    #[test]
-    fn test_get_outdated_appointments() {
+    #[tokio::test]
+    async fn test_get_outdated_appointments() {
         let start_height = START_HEIGHT as u32 + EXPIRY_DELTA;
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize));
+        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(start_height as usize)).await;
 
         // get_outdated_appointments returns a list of appointments that were outdated at a given block height, indistinguishably of their user.
 
@@ -715,9 +717,9 @@ mod tests {
         assert!(outdated_appointments.contains(&uuid2));
     }
 
-    #[test]
-    fn test_delete_appointments_from_memory() {
-        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT));
+    #[tokio::test]
+    async fn test_delete_appointments_from_memory() {
+        let gatekeeper = init_gatekeeper(&Blockchain::default().with_height(START_HEIGHT)).await;
 
         // delete_appointments will remove a list of appointments from the Gatekeeper (as long as they exist)
         let mut all_appointments = HashMap::new();
@@ -743,7 +745,7 @@ mod tests {
 
         // If there's matching data in the gatekeeper it should be deleted
         for (uuid, user_id) in to_be_deleted.iter() {
-            gatekeeper.add_update_user(*user_id).unwrap();
+            gatekeeper.add_update_user(*user_id).await.unwrap();
             gatekeeper
                 .add_update_appointment(*user_id, *uuid, &generate_dummy_appointment(None))
                 .unwrap();
@@ -767,6 +769,7 @@ mod tests {
                     .lock()
                     .unwrap()
                     .load_user(*user_id)
+                    .await
                     .unwrap()
                     .available_slots,
                 gatekeeper.subscription_slots
@@ -802,12 +805,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_block_connected() {
+    #[tokio::test]
+    async fn test_block_connected() {
         // block_connected in the Gatekeeper is used to keep track of time in order to manage the users' subscription expiry.
         // Remove users that get outdated at the new block's height from registered_users and the database.
         let mut chain = Blockchain::default().with_height(START_HEIGHT);
-        let gatekeeper = init_gatekeeper(&chain);
+        let gatekeeper = init_gatekeeper(&chain).await;
 
         // Check that users are outdated when the expected height if hit
         let user1_id = get_random_user_id();
@@ -815,7 +818,7 @@ mod tests {
         let user3_id = get_random_user_id();
 
         for user_id in &[user1_id, user2_id, user3_id] {
-            gatekeeper.add_outdated_user(*user_id, chain.tip().height + 1, None)
+            gatekeeper.add_outdated_user(*user_id, chain.tip().height + 1, None).await
         }
 
         // Connect a new block. Outdated users are deleted
@@ -829,7 +832,7 @@ mod tests {
                 .unwrap()
                 .contains_key(user_id));
             assert!(matches!(
-                gatekeeper.dbm.lock().unwrap().load_user(*user_id),
+                gatekeeper.dbm.lock().unwrap().load_user(*user_id).await,
                 Err(DBError::NotFound)
             ));
         }
@@ -841,11 +844,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_block_disconnected() {
+    #[tokio::test]
+    async fn test_block_disconnected() {
         // Block disconnected simply updates the last known block
         let chain = Blockchain::default().with_height(START_HEIGHT);
-        let gatekeeper = init_gatekeeper(&chain);
+        let gatekeeper = init_gatekeeper(&chain).await;
         let height = chain.get_block_count();
 
         let last_known_block_header = chain.tip();

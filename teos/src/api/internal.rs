@@ -2,6 +2,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use tonic::{Code, Request, Response, Status};
 use triggered::Trigger;
 
+
 use crate::protos as msgs;
 use crate::protos::private_tower_services_server::PrivateTowerServices;
 use crate::protos::public_tower_services_server::PublicTowerServices;
@@ -73,7 +74,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
             )
         })?;
 
-        match self.watcher.register(user_id) {
+        match futures::executor::block_on(self.watcher.register(user_id)){
             Ok(receipt) => Ok(Response::new(common_msgs::RegisterResponse {
                 user_id: req_data.user_id,
                 available_slots: receipt.available_slots(),
@@ -143,7 +144,7 @@ impl PublicTowerServices for Arc<InternalAPI> {
         let req_data = request.into_inner();
         let locator = Locator::from_slice(&req_data.locator).unwrap();
 
-        match self.watcher.get_appointment(locator, &req_data.signature) {
+        match futures::executor::block_on(self.watcher.get_appointment(locator, &req_data.signature)){
             Ok(info) => {
                 let (appointment_data, status) = match info {
                     AppointmentInfo::Appointment(appointment) => (
@@ -194,9 +195,9 @@ impl PublicTowerServices for Arc<InternalAPI> {
         request: Request<common_msgs::GetSubscriptionInfoRequest>,
     ) -> Result<Response<common_msgs::GetSubscriptionInfoResponse>, Status> {
         self.check_service_unavailable()?;
-        let (subscription_info, locators) = self
+        let (subscription_info, locators) = futures::executor::block_on(self
             .watcher
-            .get_subscription_info(&request.into_inner().signature)
+            .get_subscription_info(&request.into_inner().signature))
             .map_err(|e| match e {
                 GetSubscriptionInfoFailure::AuthenticationFailure => Status::new(
                     Code::Unauthenticated,
@@ -227,7 +228,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
     ) -> Result<Response<msgs::GetAllAppointmentsResponse>, Status> {
         let mut all_appointments = Vec::new();
 
-        for (_, appointment) in self.watcher.get_all_watcher_appointments().into_iter() {
+        for (_, appointment) in futures::executor::block_on(self.watcher.get_all_watcher_appointments()).into_iter() {
             all_appointments.push(common_msgs::AppointmentData {
                 appointment_data: Some(
                     common_msgs::appointment_data::AppointmentData::Appointment(
@@ -237,7 +238,7 @@ impl PrivateTowerServices for Arc<InternalAPI> {
             })
         }
 
-        for (_, tracker) in self.watcher.get_all_responder_trackers().into_iter() {
+        for (_, tracker) in futures::executor::block_on(self.watcher.get_all_responder_trackers()).into_iter() {
             all_appointments.push(common_msgs::AppointmentData {
                 appointment_data: Some(common_msgs::appointment_data::AppointmentData::Tracker(
                     tracker.into(),
@@ -357,7 +358,7 @@ mod tests_private_api {
 
         // Add data to the Watcher so we can retrieve it later on
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -386,7 +387,7 @@ mod tests_private_api {
         // Add data to the Responser so we can retrieve it later on
         let (_, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         internal_api
@@ -429,7 +430,7 @@ mod tests_private_api {
         // Register a user
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         // Add data to the Watcher
         for _ in 0..2 {
@@ -471,7 +472,7 @@ mod tests_private_api {
         for _ in 0..2 {
             let (_, user_pk) = get_random_keypair();
             let user_id = UserId(user_pk);
-            internal_api.watcher.register(user_id).unwrap();
+            internal_api.watcher.register(user_id).await.unwrap();
             users.insert(user_id.to_vec());
         }
 
@@ -504,7 +505,7 @@ mod tests_private_api {
         // Register a user and get it back
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         let response = internal_api
             .get_user(Request::new(msgs::GetUserRequest {
@@ -686,7 +687,7 @@ mod tests_public_api {
 
         // User must be registered
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -740,7 +741,7 @@ mod tests_public_api {
 
         // User is registered but has no slots
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -769,7 +770,7 @@ mod tests_public_api {
 
         // User is registered but subscription is expired
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -795,7 +796,7 @@ mod tests_public_api {
 
         let (user_sk, user_pk) = get_random_keypair();
         let user_id = UserId(user_pk);
-        internal_api.watcher.register(user_id).unwrap();
+        internal_api.watcher.register(user_id).await.unwrap();
 
         let appointment = generate_dummy_appointment(None).inner;
         let user_signature = cryptography::sign(&appointment.to_vec(), &user_sk).unwrap();
@@ -850,7 +851,7 @@ mod tests_public_api {
 
         // The user must be registered
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         // Add the appointment
         let appointment = generate_dummy_appointment(None).inner;
@@ -883,7 +884,7 @@ mod tests_public_api {
 
         // Add a first user to link the appointment to him
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         // There's no need to add the appointment given the subscription status is checked first
         let appointment = generate_dummy_appointment(None).inner;
@@ -911,7 +912,7 @@ mod tests_public_api {
 
         // The user is registered but the appointment does not exist
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         // Try to get the appointment through the API
         let appointment = generate_dummy_appointment(None).inner;
@@ -938,7 +939,7 @@ mod tests_public_api {
 
         // Register the user
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         // There s no need to add the appointment given the subscription status is checked first.
         let appointment = generate_dummy_appointment(None).inner;
@@ -989,7 +990,7 @@ mod tests_public_api {
 
         // The user must be registered
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         // Get the subscription info though the API
         let message = "get subscription info".to_string();
@@ -1036,7 +1037,7 @@ mod tests_public_api {
 
         // The user is registered but the subscription has expired
         let (user_sk, user_pk) = get_random_keypair();
-        internal_api.watcher.register(UserId(user_pk)).unwrap();
+        internal_api.watcher.register(UserId(user_pk)).await.unwrap();
 
         // Try to get the subscription info though the API
         let message = "get subscription info".to_string();
