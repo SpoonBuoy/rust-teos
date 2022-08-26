@@ -95,7 +95,7 @@ impl Gatekeeper {
         subscription_duration: u32,
         expiry_delta: u32,
         dbm: Arc<Mutex<DBM>>,
-    ) -> Self {
+    ) -> Self{
         let registered_users = dbm.lock().unwrap().load_all_users().await;
         Gatekeeper {
             last_known_block_height: AtomicU32::new(last_known_block_height),
@@ -170,7 +170,7 @@ impl Gatekeeper {
                     .checked_add(self.subscription_slots)
                     .ok_or(MaxSlotsReached)?;
                 user_info.subscription_expiry = block_count + self.subscription_duration;
-                self.dbm.lock().unwrap().update_user(user_id, user_info);
+                self.dbm.lock().unwrap().update_user(user_id, user_info).await;
 
                 user_info
             }

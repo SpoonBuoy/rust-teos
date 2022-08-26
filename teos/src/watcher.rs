@@ -335,7 +335,7 @@ impl Watcher {
             return Err(AddAppointmentFailure::SubscriptionExpired(expiry));
         }
 
-        let mut extended_appointment = ExtendedAppointment::new(
+        let extended_appointment = ExtendedAppointment::new(
             appointment,
             user_id,
             user_signature,
@@ -389,7 +389,7 @@ impl Watcher {
     async fn store_appointment(
         &self,
         uuid: UUID,
-        appointment: & 'static ExtendedAppointment,
+        appointment: &ExtendedAppointment,
     ) -> StoredAppointment {
         self.appointments
             .lock()
@@ -444,7 +444,7 @@ impl Watcher {
     async fn store_triggered_appointment(
         &self,
         uuid: UUID,
-        appointment: &'static ExtendedAppointment,
+        appointment: &ExtendedAppointment,
         user_id: UserId,
         dispute_tx: &Transaction,
     ) -> TriggeredAppointment {
@@ -1654,7 +1654,7 @@ mod tests {
                     .insert(*locator, HashSet::from_iter(vec![uuid]));
 
                 // Store data in the database (the user needs to be there as well since it is a FK for appointments)
-                store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
+                store_appointment_and_fks_to_db(&mut watcher.dbm.lock().unwrap(), uuid, &appointment);
             }
         }
 
@@ -1701,7 +1701,7 @@ mod tests {
                 .unwrap()
                 .insert(appointment.locator(), HashSet::from_iter([uuid]));
 
-            store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
+            store_appointment_and_fks_to_db(&mut watcher.dbm.lock().unwrap(), uuid, &appointment);
             to_be_deleted.insert(uuid, appointment.locator());
         }
 
@@ -1758,7 +1758,7 @@ mod tests {
                 .insert(appointment.locator(), HashSet::from_iter([uuid]));
 
             // Add data to the database to check data deletion
-            store_appointment_and_fks_to_db(&watcher.dbm.lock().unwrap(), uuid, &appointment);
+            store_appointment_and_fks_to_db(&mut watcher.dbm.lock().unwrap(), uuid, &appointment);
 
             // Make it so some of the locators have multiple associated uuids
             if i % 3 == 0 {

@@ -613,8 +613,9 @@ mod tests {
             // Add data to the db
             let (_, appointment) =
                 generate_dummy_appointment_with_user(user_id, Some(&tracker.dispute_tx.txid()));
-            
-            store_appointment_and_fks_to_db(&self.dbm.lock().unwrap(), uuid, &appointment);
+            //let b = appointment.to_owned();
+            store_appointment_and_fks_to_db(&mut self.dbm.lock().unwrap(), uuid, &appointment);
+           // drop(appointment);
             self.dbm
                 .lock()
                 .unwrap()
@@ -710,7 +711,7 @@ mod tests {
             // Add the necessary FKs in the database
             let user_id = get_random_user_id();
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-            store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+            store_appointment_and_fks_to_db(&mut responder.dbm.lock().unwrap(), uuid, &appointment);
 
             let breach = get_random_breach();
             let s = if i % 2 == 0 {
@@ -734,7 +735,7 @@ mod tests {
 
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&mut responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach();
         let penalty_txid = breach.penalty_tx.txid();
@@ -805,7 +806,7 @@ mod tests {
         // Add the necessary FKs in the database
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&mut responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let mut breach = get_random_breach();
         responder.add_tracker(
@@ -931,7 +932,7 @@ mod tests {
         // Add a new tracker
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&mut responder.dbm.lock().unwrap(), uuid, &appointment);
 
         let breach = get_random_breach();
         responder.add_tracker(
@@ -961,7 +962,7 @@ mod tests {
         // Store the user and the appointment in the database so we can add the tracker later on (due to FK restrictions)
         let user_id = get_random_user_id();
         let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
-        store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+        store_appointment_and_fks_to_db(&mut responder.dbm.lock().unwrap(), uuid, &appointment);
 
         // Data should not be there before adding it
         assert_eq!(responder.get_tracker(uuid).await, None);
@@ -1009,7 +1010,7 @@ mod tests {
             let (uuid, appointment) = generate_dummy_appointment_with_user(user_id, None);
             let breach = get_random_breach();
 
-            store_appointment_and_fks_to_db(&responder.dbm.lock().unwrap(), uuid, &appointment);
+            store_appointment_and_fks_to_db(&mut responder.dbm.lock().unwrap(), uuid, &appointment);
 
             if i % 4 == 0 {
                 responder.add_tracker(

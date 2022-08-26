@@ -54,9 +54,9 @@ where
     last_n_blocks
 }
 
-fn create_new_tower_keypair(db: &DBM) -> (SecretKey, PublicKey) {
+async fn create_new_tower_keypair(db: &mut DBM) -> (SecretKey, PublicKey) {
     let (sk, pk) = get_random_keypair();
-    db.store_tower_key(&sk).unwrap();
+    db.store_tower_key(&sk).await.unwrap();
     (sk, pk)
 }
 
@@ -93,22 +93,22 @@ async fn main() {
         std::process::exit(1);
     });
     let dbm = Arc::new(Mutex::new(
-        DBM::new(path_network.join("teos_db.sql3")).unwrap(),
+        DBM::new(path_network.join("teos_db.sql3")).await.unwrap(),
     ));
 
     // Load tower secret key or create a fresh one if none is found. If overwrite key is set, create a new
     // key straightaway
     let (tower_sk, tower_pk) = {
-        let locked_db = dbm.lock().unwrap();
+        let mut locked_db = dbm.lock().unwrap();
         if conf.overwrite_key {
             log::info!("Overwriting tower keys");
-            create_new_tower_keypair(&locked_db)
+            create_new_tower_keypair(&mut locked_db).await
         } else {
-            match locked_db.load_tower_key() {
+            match locked_db.load_tower_key().await {
                 Ok(sk) => (sk, PublicKey::from_secret_key(&Secp256k1::new(), &sk)),
                 Err(_) => {
                     log::info!("Tower keys not found. Creating a fresh set");
-                    create_new_tower_keypair(&locked_db)
+                    create_new_tower_keypair(&mut locked_db).await
                 }
             }
         }
@@ -150,7 +150,7 @@ async fn main() {
     );
     let mut derefed = bitcoin_cli.deref();
     // Load last known block from DB if found. Poll it from Bitcoind otherwise.
-    let tip = if let Ok(block_hash) = dbm.lock().unwrap().load_last_known_block() {
+    let tip = if let Ok(block_hash) = dbm.lock().unwrap().load_last_known_block().await {
         derefed
             .get_header(&block_hash, None)
             .await
@@ -172,10 +172,10 @@ async fn main() {
         conf.subscription_duration,
         conf.expiry_delta,
         dbm.clone(),
-    ));
+    ).await);
 
     let carrier = Carrier::new(rpc, bitcoind_reachable.clone(), tip.deref().height);
-    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone()));
+    let responder = Arc::new(Responder::new(carrier, gatekeeper.clone(), dbm.clone()).await);
     let watcher = Arc::new(Watcher::new(
         gatekeeper.clone(),
         responder.clone(),
@@ -184,7 +184,7 @@ async fn main() {
         tower_sk,
         UserId(tower_pk),
         dbm.clone(),
-    ));
+    ).await);
 
     if watcher.is_fresh() & responder.is_fresh() & gatekeeper.is_fresh() {
         log::info!("Fresh bootstrap");

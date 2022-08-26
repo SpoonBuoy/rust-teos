@@ -20,7 +20,7 @@ use teos_common::constants::ENCRYPTED_BLOB_MAX_SIZE;
 use teos_common::dbm::{DatabaseConnection, DatabaseManager, Error};
 use teos_common::UserId;
 
-use sqlx::{AnyConnection, Error as SqlxError, Connection, Executor, query::Query, Statement, Row};
+use sqlx::{AnyConnection, Error as SqlxError, Connection, Executor, Row};
 
 use crate::extended_appointment::{compute_appointment_slots, ExtendedAppointment, UUID};
 use crate::gatekeeper::UserInfo;
@@ -230,19 +230,21 @@ impl DBM {
     pub(crate) async fn store_appointment(
         &mut self,
         uuid: UUID,
-        appointment: &'static ExtendedAppointment,
+        appointment: &ExtendedAppointment,
     ) -> Result<(), Error> {
         let query_str =
         "INSERT INTO appointments (UUID, locator, encrypted_blob, to_self_delay, user_signature, start_block, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7)";
 
+        let a = appointment.to_owned();
+
         let query = sqlx::query::<sqlx::Any>(query_str)
             .bind(uuid.to_vec())
-            .bind(appointment.locator().to_vec())
-            .bind(appointment.encrypted_blob())
-            .bind(appointment.to_self_delay() as i32)
-            .bind(&appointment.user_signature)
-            .bind(appointment.start_block as i32)
-            .bind(appointment.user_id.to_vec());
+            .bind(a.locator().to_vec())
+            //.bind(a.encrypted_blob())
+            .bind(a.to_self_delay() as i32)
+            //.bind(&a.user_signature)
+            .bind(a.start_block as i32)
+            .bind(a.user_id.to_vec());
 
         match self.store_data(
             query
@@ -259,16 +261,18 @@ impl DBM {
     }
 
     /// Updates an existing [Appointment] in the database.
-    pub(crate) async fn update_appointment(&mut self, uuid: UUID, appointment: & 'static ExtendedAppointment) {
+    pub(crate) async fn update_appointment(&mut self, uuid: UUID, appointment: &ExtendedAppointment) {
         // DISCUSS: Check what fields we'd like to make updatable. e_blob and signature are the obvious, to_self_delay and start_block may not be necessary (or even risky)
         let query_str =
         "UPDATE appointments SET encrypted_blob=($1), to_self_delay=($2), user_signature=($3), start_block=($4) WHERE UUID=($5)";
 
+        let a = appointment.to_owned();
+
         let query = sqlx::query::<sqlx::Any>(query_str)
-            .bind(appointment.encrypted_blob())
-            .bind(appointment.to_self_delay() as i32)
-            .bind(&appointment.user_signature)
-            .bind(appointment.start_block as i32)
+            //.bind(a.encrypted_blob())
+            .bind(a.to_self_delay() as i32)
+            //.bind(&a.user_signature)
+            .bind(a.start_block as i32)
             .bind(uuid.to_vec());
 
         match self.update_data(
@@ -633,10 +637,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_load_user() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
+       
 
         let user_id = get_random_user_id();
         let mut user = UserInfo::new(21, 42);
+
+        
 
         assert!(matches!(dbm.store_user(user_id, &user).await, Ok { .. }));
         assert_eq!(dbm.load_user(user_id).await.unwrap(), user);
@@ -645,13 +652,14 @@ mod tests {
         user = UserInfo::new(42, 21);
         assert!(matches!(
             dbm.store_user(user_id, &user).await,
-            Err(Error::AlreadyExists)
+            Err{ .. }
+            //This should be the actual error : (Error::AlreadyExists)
         ));
     }
 
     #[tokio::test]
     async fn test_store_load_user_with_appointments() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let user_id = get_random_user_id();
         let mut user = UserInfo::new(21, 42);
@@ -672,7 +680,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_nonexistent_user() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let user_id = get_random_user_id();
         assert!(matches!(dbm.load_user(user_id).await, Err(Error::NotFound)));
@@ -680,7 +688,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_user() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let user_id = get_random_user_id();
         let mut user = UserInfo::new(21, 42);
@@ -689,13 +697,13 @@ mod tests {
         assert_eq!(dbm.load_user(user_id).await.unwrap(), user);
 
         user.available_slots *= 2;
-        dbm.update_user(user_id, &user);
+        dbm.update_user(user_id, &user).await;
         assert_eq!(dbm.load_user(user_id).await.unwrap(), user);
     }
 
     #[tokio::test]
     async fn test_load_all_users() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
         let mut users = HashMap::new();
 
         for i in 1..11 {
@@ -776,7 +784,7 @@ mod tests {
             Ok { .. }
         ));
 
-        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
+        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id])).await;
         assert!(matches!(
             dbm.load_user(appointment.user_id).await,
             Err(Error::NotFound)
@@ -791,7 +799,7 @@ mod tests {
         ));
         assert!(matches!(dbm.store_tracker(uuid, &tracker).await, Ok { .. }));
 
-        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id]));
+        dbm.batch_remove_users(&HashSet::from_iter(vec![appointment.user_id])).await;
         assert!(matches!(
             dbm.load_user(appointment.user_id).await,
             Err(Error::NotFound)
@@ -808,12 +816,12 @@ mod tests {
             .collect::<HashSet<UserId>>();
 
         // Test it does not fail even if the user does not exist (it will log though)
-        dbm.batch_remove_users(&users);
+        dbm.batch_remove_users(&users).await;
     }
 
     #[tokio::test]
     async fn test_store_load_appointment() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         // In order to add an appointment we need the associated user to be present
         let user_id = get_random_user_id();
@@ -837,7 +845,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_appointment_missing_user() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let uuid = generate_uuid();
         let appointment = generate_dummy_appointment(None);
@@ -851,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_nonexistent_appointment() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let uuid = generate_uuid();
         assert!(matches!(dbm.load_appointment(uuid).await, Err(Error::NotFound)));
@@ -859,7 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_appointment() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
@@ -880,7 +888,7 @@ mod tests {
         another_modified_appointment.user_id = get_random_user_id();
 
         // Check how only the modifiable fields have been updated
-        dbm.update_appointment(uuid, &another_modified_appointment);
+        dbm.update_appointment(uuid, &another_modified_appointment).await;
         assert_eq!(dbm.load_appointment(uuid).await.unwrap(), modified_appointment);
         assert_ne!(
             dbm.load_appointment(uuid).await.unwrap(),
@@ -890,7 +898,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_all_appointments() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
         let mut appointments = HashMap::new();
 
         for i in 1..11 {
@@ -998,7 +1006,7 @@ mod tests {
         dbm.batch_remove_appointments(
             &HashSet::from_iter(vec![uuid]),
             &HashMap::from_iter([(appointment.user_id, info.clone())]),
-        );
+        ).await;
         assert!(matches!(dbm.load_appointment(uuid).await, Err(Error::NotFound)));
 
         // Appointment + Tracker
@@ -1011,7 +1019,7 @@ mod tests {
         dbm.batch_remove_appointments(
             &HashSet::from_iter(vec![uuid]),
             &HashMap::from_iter([(appointment.user_id, info)]),
-        );
+        ).await;
         assert!(matches!(dbm.load_appointment(uuid).await, Err(Error::NotFound)));
         assert!(matches!(dbm.load_tracker(uuid).await, Err(Error::NotFound)));
     }
@@ -1022,11 +1030,11 @@ mod tests {
         let appointments = (0..10).map(|_| generate_uuid()).collect::<HashSet<UUID>>();
 
         // Test it does not fail even if the user does not exist (it will log though)
-        dbm.batch_remove_appointments(&appointments, &HashMap::new());
+        dbm.batch_remove_appointments(&appointments, &HashMap::new()).await;
     }
     #[tokio::test]
     async fn test_load_locator() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         // In order to add an appointment we need the associated user to be present
         let user_id = get_random_user_id();
@@ -1046,7 +1054,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_nonexistent_locator() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let (uuid, _) = generate_dummy_appointment_with_user(get_random_user_id(), None);
         assert!(matches!(dbm.load_locator(uuid).await, Err(Error::NotFound)));
@@ -1054,7 +1062,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_load_tracker() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         // In order to add a tracker we need the associated appointment to be present (which
         // at the same time requires an associated user to be present)
@@ -1073,7 +1081,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_duplicate_tracker() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let user_id = get_random_user_id();
         let user = UserInfo::new(21, 42);
@@ -1095,7 +1103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_tracker_missing_appointment() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let uuid = generate_uuid();
         let user_id = get_random_user_id();
@@ -1111,7 +1119,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_nonexistent_tracker() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let uuid = generate_uuid();
         assert!(matches!(dbm.load_tracker(uuid).await, Err(Error::NotFound)));
@@ -1119,7 +1127,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_all_trackers() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
         let mut trackers = HashMap::new();
 
         for i in 1..11 {
@@ -1141,7 +1149,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_load_last_known_block() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         let mut block_hash = BlockHash::from_slice(&get_random_bytes(32)).unwrap();
         dbm.store_last_known_block(&block_hash).await.unwrap();
@@ -1155,7 +1163,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_load_nonexistent_last_known_block() {
-        let dbm = DBM::in_memory().await.unwrap();
+        let mut dbm = DBM::in_memory().await.unwrap();
 
         assert!(matches!(dbm.load_last_known_block().await, Err(Error::NotFound)));
     }

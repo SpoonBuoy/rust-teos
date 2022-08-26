@@ -373,15 +373,15 @@ pub(crate) fn get_random_tracker(
 }
 
 pub(crate) fn store_appointment_and_fks_to_db(
-    dbm: &DBM,
+    dbm: &mut DBM,
     uuid: UUID,
-    appointment: &'static ExtendedAppointment,
+    appointment: &ExtendedAppointment,
 ) {
     futures::executor::block_on(
         dbm.store_user(appointment.user_id, &UserInfo::new(21, 42))
     ).unwrap();
     futures::executor::block_on(
-        dbm.store_appointment(uuid, appointment)
+        dbm.store_appointment(uuid, &appointment.to_owned())
     ).unwrap();
 }
 
